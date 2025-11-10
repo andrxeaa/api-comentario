@@ -3,20 +3,23 @@ service: api-comentario
 
 provider:
   name: aws
-  runtime: python3.13	
-  # Default memory size for functions (default: 1024MB)
+  runtime: python3.13
+  stage: ${sls:stage}            # explícito por claridad
   memorySize: 1024
   timeout: 20
   iam:
-    role: arn:aws:iam::773697219055:role/LabRole	
+    role: arn:aws:iam::773697219055:role/LabRole
   environment:
     TABLE_NAME: ${sls:stage}-t_comentarios
+    # Nombre del bucket de ingesta por stage (coincide con el recurso S3 creado abajo)
+    INGEST_BUCKET: ${sls:stage}-${self:service}-ingesta
+    STAGE: ${sls:stage}
 
 functions:
   crear:
     handler: comentario.lambda_handler
     events:
-      - http:
+      - http: 
           path: /comentario/crear
           method: post
           cors: true
@@ -38,5 +41,62 @@ resources:
             KeyType: HASH
           - AttributeName: uuid
             KeyType: RANGE
-        # Set the capacity to auto-scale
         BillingMode: PAY_PER_REQUEST
+
+    # Bucket S3 por stage para ingesta push
+    IngestBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${sls:stage}-${self:service}-ingesta
+        VersioningConfiguration:
+          Status: Enabled
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        # Tags opcionales
+        Tags:
+          - Key: Stage
+            Value: ${sls:stage}
+          - Key: Service
+            Value: ${self:service}
+
+    # Política IAM para otorgar permisos S3 al role existente LabRole
+    # IMPORTANTE: this attaches a policy to an existing role named "LabRole".
+    # Si tu role se llama distinto, reemplaza 'LabRole' en Roles: - LabRole
+    GrantS3PutPolicyToLabRole:
+      Type: AWS::IAM::Policy
+      Properties:
+        PolicyName: AllowS3IngestPut-${sls:stage}
+        Roles:
+          - LabRole
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:PutObjectAcl
+                - s3:PutObjectTagging
+              Resource:
+                - Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - ${sls:stage}-${self:service}-ingesta
+                      - "/*"
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource:
+                - Fn::Join:
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - ${sls:stage}-${self:service}-ingesta
+
+  Outputs:
+    IngestBucketName:
+      Description: "Bucket de ingesta para comentarios"
+      Value: ${sls:stage}-${self:service}-ingesta
+      Export:
+        Name: ${self:service}:${sls:stage}:IngestBucketName
