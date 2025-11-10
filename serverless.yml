@@ -4,22 +4,34 @@ service: api-comentario
 provider:
   name: aws
   runtime: python3.13
-  stage: ${sls:stage}            # explícito por claridad
+  stage: ${opt:stage, 'dev'}
   memorySize: 1024
   timeout: 20
+  role: arn:aws:iam::773697219055:role/LabRole
+
   iam:
-    role: arn:aws:iam::773697219055:role/LabRole
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:PutObjectAcl
+            - s3:PutObjectTagging
+            - s3:ListBucket
+          Resource:
+            - arn:aws:s3:::${self:provider.stage}-${self:service}-ingesta
+            - arn:aws:s3:::${self:provider.stage}-${self:service}-ingesta/*
+
   environment:
-    TABLE_NAME: ${sls:stage}-t_comentarios
-    # Nombre del bucket de ingesta por stage (coincide con el recurso S3 creado abajo)
-    INGEST_BUCKET: ${sls:stage}-${self:service}-ingesta
-    STAGE: ${sls:stage}
+    TABLE_NAME: ${self:provider.stage}-t_comentarios
+    INGEST_BUCKET: ${self:provider.stage}-${self:service}-ingesta
+    STAGE: ${self:provider.stage}
 
 functions:
   crear:
     handler: comentario.lambda_handler
     events:
-      - http: 
+      - http:
           path: /comentario/crear
           method: post
           cors: true
@@ -43,11 +55,10 @@ resources:
             KeyType: RANGE
         BillingMode: PAY_PER_REQUEST
 
-    # Bucket S3 por stage para ingesta push
     IngestBucket:
       Type: AWS::S3::Bucket
       Properties:
-        BucketName: ${sls:stage}-${self:service}-ingesta
+        BucketName: ${self:provider.stage}-${self:service}-ingesta
         VersioningConfiguration:
           Status: Enabled
         PublicAccessBlockConfiguration:
@@ -55,48 +66,15 @@ resources:
           BlockPublicPolicy: true
           IgnorePublicAcls: true
           RestrictPublicBuckets: true
-        # Tags opcionales
         Tags:
           - Key: Stage
-            Value: ${sls:stage}
+            Value: ${self:provider.stage}
           - Key: Service
             Value: ${self:service}
-
-    # Política IAM para otorgar permisos S3 al role existente LabRole
-    # IMPORTANTE: this attaches a policy to an existing role named "LabRole".
-    # Si tu role se llama distinto, reemplaza 'LabRole' en Roles: - LabRole
-    GrantS3PutPolicyToLabRole:
-      Type: AWS::IAM::Policy
-      Properties:
-        PolicyName: AllowS3IngestPut-${sls:stage}
-        Roles:
-          - LabRole
-        PolicyDocument:
-          Version: "2012-10-17"
-          Statement:
-            - Effect: Allow
-              Action:
-                - s3:PutObject
-                - s3:PutObjectAcl
-                - s3:PutObjectTagging
-              Resource:
-                - Fn::Join:
-                    - ""
-                    - - "arn:aws:s3:::"
-                      - ${sls:stage}-${self:service}-ingesta
-                      - "/*"
-            - Effect: Allow
-              Action:
-                - s3:ListBucket
-              Resource:
-                - Fn::Join:
-                    - ""
-                    - - "arn:aws:s3:::"
-                      - ${sls:stage}-${self:service}-ingesta
 
   Outputs:
     IngestBucketName:
       Description: "Bucket de ingesta para comentarios"
-      Value: ${sls:stage}-${self:service}-ingesta
+      Value: ${self:provider.stage}-${self:service}-ingesta
       Export:
-        Name: ${self:service}:${sls:stage}:IngestBucketName
+        Name: ${self:service}:${self:provider.stage}:IngestBucketName
